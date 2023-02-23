@@ -27,6 +27,17 @@
     (when (anomaly? res)
       (print-anomaly res))))
 
+(defn delete-message-batch [pgqs queue-url receipt-handles]
+  (let [entries (->> receipt-handles
+                     (map-indexed (fn [idx receipt-handle]
+                                    {:Id idx, :ReceiptHandle receipt-handle})))
+        op-map {:op :DeleteMessageBatch
+                :request {:QueueUrl queue-url
+                          :Entries entries}}
+        res (-> (pgqs/invoke pgqs op-map))]
+    (when (anomaly? res)
+      (print-anomaly res))))
+
 (comment
 
   (def db-spec {:dbtype "postgresql"
@@ -122,5 +133,32 @@
             (doseq [{:keys [ReceiptHandle]} received-messages]
               (delete-message pgqs queue-url ReceiptHandle))
             (recur (receive-messages pgqs queue-url n)))))))
+
+  ;; batches
+
+  (dotimes [_ 12]
+    (async/thread
+      ((fn []
+         (dotimes [_ 1000]
+           (let [entries (->> (repeat 10 {:MessageBody (str "some message body" (random-uuid))})
+                              (map-indexed (fn [idx msg]
+                                             (assoc msg :Id idx))))
+                 op-map {:op :SendMessageBatch
+                         :request {:QueueUrl queue-url
+                                   :Entries entries}}
+                 res (pgqs/invoke pgqs op-map)]
+             (when (anomaly? res)
+               (print-anomaly res))))))))
+
+
+  (dotimes [_ 10]
+    (async/thread
+      (let [n 10]
+        (loop [received-messages (receive-messages pgqs queue-url n)]
+          (when (seq received-messages)
+            (let [receipt-handles (map :ReceiptHandle received-messages)]
+              (delete-message-batch pgqs queue-url receipt-handles))
+            (recur (receive-messages pgqs queue-url n)))))))
+
 
   :end)
